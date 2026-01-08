@@ -105,6 +105,7 @@ ipcMain.handle('launch-software-b', async () => {
 });
 
 // --- FEATURE 2: LAUNCH WEB KIOSK ---
+// --- FEATURE 2: LAUNCH WEB KIOSK ---
 ipcMain.handle('launch-web-kiosk', async (event, url) => {
   mainWindow.hide();
   
@@ -115,60 +116,27 @@ ipcMain.handle('launch-web-kiosk', async (event, url) => {
     webPreferences: { 
       nodeIntegration: false,
       contextIsolation: true,
-      // 1. IMPORTANT: The Kiosk needs the preload script to talk to Electron
       preload: path.join(__dirname, 'preload.cjs') 
     }
   });
 
   webWindow.loadURL(url);
 
-  // 2. THE BUTTON WATCHER SCRIPT
-  // This runs inside the web page once it finishes loading
-  webWindow.webContents.on('did-finish-load', () => {
-    const watcherScript = 
-      console.log("Electron Kiosk Script Loaded: Watching for Back Button...");
-
-      // A MutationObserver watches for changes in the HTML (like the button appearing)
-      const observer = new MutationObserver(() => {
-        
-        // --- CONFIGURATION: HOW TO FIND YOUR BUTTON ---
-        // Option A: Look for a button with specific text (Easiest)
-        const allButtons = Array.from(document.querySelectorAll('button, a, div[role="button"]'));
-        const targetBtn = allButtons.find(b => 
-          b.innerText.toLowerCase().includes('back to main') || 
-          b.innerText.toLowerCase().includes('SULJE') // <--- Adjust this text to match your button!
-        );
-
-        // Option B: If you know the class, use this instead:
-        // const targetBtn = document.querySelector('.btn-back-home');
-
-        // If we found the button and haven't hooked it yet...
-        if (targetBtn && !targetBtn.getAttribute('data-electron-hooked')) {
-          console.log("Target Button Found! Attaching Close Event.");
-          
-          // Mark it so we don't attach twice
-          targetBtn.setAttribute('data-electron-hooked', 'true');
-
-          // Add the click listener
-          targetBtn.addEventListener('click', (e) => {
-            // Optional: Prevent the default Blazor action if you want
-            // e.preventDefault(); 
-            
-            console.log("Button Clicked. Closing Kiosk via Electron...");
-            window.electronAPI.closeKiosk();
-          });
-        }
-      });
-
-      // Start watching the entire body for changes
-      observer.observe(document.body, { childList: true, subtree: true });
-    
-
-    // Inject the script
-    webWindow.webContents.executeJavaScript(watcherScript).catch(console.error);
+  // --- OPTION B: CONSOLE LOG WATCHER (Recommended) ---
+  // Since you saw "Successfully sent data to API" in your logs, this is safer!
+  webWindow.webContents.on('console-message', (event, level, message) => {
+    // Check if the log message contains your success text
+    if (message.includes('Successfully sent data to API')) {
+      console.log("Test Success detected! Closing window in 5 seconds...");
+      
+      // Optional: Wait 5 seconds to let the user see the result, then close
+      setTimeout(() => {
+        webWindow.close();
+      }, 5000);
+    }
   });
 
-  // Safety: Allow ESC key to close it manually
+  // Safety: Allow ESC key to close
   webWindow.webContents.on('before-input-event', (event, input) => {
     if (input.key === 'Escape' && input.type === 'keyDown') webWindow.close();
   });
@@ -181,7 +149,6 @@ ipcMain.handle('launch-web-kiosk', async (event, url) => {
     });
   });
 });
-
 
 
 // Add this anywhere in the IPC section
