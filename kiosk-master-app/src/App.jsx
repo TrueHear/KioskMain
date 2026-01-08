@@ -15,7 +15,13 @@ function App() {
   // 2. Web Kiosk Handler
   const handleWeb = async () => {
     setStatus("Running Web Kiosk...");
-    await window.electronAPI.openWebKiosk("https://kiosk.oscilla.app/");
+    const patientData = {
+    firstName: "Matti",
+    lastName: "Meikäläinen",
+    email: "matti.testi@example.com",
+    dateOfBirth: "1980-01-01" // Format usually YYYY-MM-DD or DD.MM.YYYY depending on your site
+  };
+    await window.electronAPI.openWebKiosk("https://kiosk.oscilla.app/", patientData);
     setStatus("Web Kiosk Closed.");
   };
 

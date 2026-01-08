@@ -6,10 +6,10 @@ const ADODB = require('node-adodb');
 // --- CONFIGURATION ---
 const isDev = process.env.NODE_ENV === 'development';
 
-// Database Path (Note the double backslashes for Windows)
+// Database Path
 const DB_PATH = 'C:\\Users\\Public\\AudioConsole_data\\ACDB.mdb';
 
-// Choose Provider: 'Microsoft.Jet.OLEDB.4.0' (Old) or 'Microsoft.ACE.OLEDB.12.0' (Newer)
+// Choose Provider
 const connection = ADODB.open(`Provider=Microsoft.Jet.OLEDB.4.0;Data Source=${DB_PATH};`);
 
 let mainWindow;
@@ -21,42 +21,26 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, 'preload.cjs') // Point to CJS
+      preload: path.join(__dirname, 'preload.cjs') 
     },
   });
 
-  // --- ADD THIS BLOCK TO ENABLE USB/HID DEVICES ---
-
-  // 1. Handle WebUSB requests (Most common for custom hardware)
+  // --- USB / HID PERMISSION HANDLERS ---
   mainWindow.webContents.session.on('select-usb-device', (event, details, callback) => {
-    
-    // Add events to details to see what devices are being requested in your terminal
     console.log('USB Request detected:', details);
-
-    // Automate the selection:
-    // This finds the first device in the list and connects to it.
-    // If you need a specific device, you can filter by details.deviceList[i].vendorId
     event.preventDefault();
-    
-    const deviceToReturn = details.deviceList.find((device) => {
-      // Return TRUE to select the device. 
-      // For now, we return the first valid device found.
-      return device.productId && device.vendorId;
-    });
-
+    const deviceToReturn = details.deviceList.find(d => d.productId && d.vendorId);
     if (deviceToReturn) {
       console.log('Auto-granting USB permission to:', deviceToReturn.productName);
       callback(deviceToReturn.deviceId);
     } else {
-      console.log('No USB device found');
-      callback(); // Cancel the request
+      callback();
     }
   });
 
-  // 2. Handle WebHID requests (Common for keyboards, gamepads, and some medical devices)
   mainWindow.webContents.session.on('select-hid-device', (event, details, callback) => {
     event.preventDefault();
-    const deviceToReturn = details.deviceList[0]; // Auto-select the first one
+    const deviceToReturn = details.deviceList[0];
     if (deviceToReturn) {
       console.log('Auto-granting HID permission to:', deviceToReturn.productName);
       callback(deviceToReturn.deviceId);
@@ -65,15 +49,11 @@ function createWindow() {
     }
   });
   
-  // 3. Handle Serial Port requests (Less common for web apps, but possible)
   mainWindow.webContents.session.on('select-serial-port', (event, portList, webContents, callback) => {
     event.preventDefault();
-    const port = portList.find((device) => device.vendorId); // Select first available
-    if (port) {
-      callback(port.portId);
-    } else {
-      callback('');
-    }
+    const port = portList.find(d => d.vendorId);
+    if (port) callback(port.portId);
+    else callback('');
   });
 
   const startURL = isDev 
@@ -104,9 +84,8 @@ ipcMain.handle('launch-software-b', async () => {
   });
 });
 
-// --- FEATURE 2: LAUNCH WEB KIOSK ---
-// --- FEATURE 2: LAUNCH WEB KIOSK ---
-ipcMain.handle('launch-web-kiosk', async (event, url) => {
+// --- FEATURE 2: LAUNCH WEB KIOSK (With Injection) ---
+ipcMain.handle('launch-web-kiosk', async (event, url, userData) => {
   mainWindow.hide();
   
   const webWindow = new BrowserWindow({
@@ -122,8 +101,97 @@ ipcMain.handle('launch-web-kiosk', async (event, url) => {
 
   webWindow.loadURL(url);
 
-  // --- OPTION B: CONSOLE LOG WATCHER (Recommended) ---
-  // Since you saw "Successfully sent data to API" in your logs, this is safer!
+  // --- INJECTION & WATCHER LOGIC ---
+  webWindow.webContents.on('did-finish-load', () => {
+    
+    // 1. DATA INJECTION SCRIPT
+    const injectionScript = `
+      (function() {
+        console.log("Electron: Starting Data Injection...");
+        
+        // Pass the data from Electron to the browser context
+        const data = ${JSON.stringify(userData || {})};
+
+        // HELPER: Forces Blazor/React to detect value changes
+        function setNativeValue(element, value) {
+          const valueSetter = Object.getOwnPropertyDescriptor(element, 'value').set;
+          const prototype = Object.getPrototypeOf(element);
+          const prototypeValueSetter = Object.getOwnPropertyDescriptor(prototype, 'value').set;
+          
+          if (valueSetter && valueSetter !== prototypeValueSetter) {
+            prototypeValueSetter.call(element, value);
+          } else {
+            valueSetter.call(element, value);
+          }
+          
+          element.value = value;
+          element.dispatchEvent(new Event('input', { bubbles: true }));
+          element.dispatchEvent(new Event('change', { bubbles: true }));
+          element.dispatchEvent(new Event('blur', { bubbles: true })); // Sometimes needed for validation
+        }
+
+        // HELPER: Forces Checkbox Click
+        function setCheckbox(element, checked) {
+           if (element.checked !== checked) {
+              element.click(); // 'Click' is often safer than setting .checked for frameworks
+           }
+        }
+
+        // RETRY LOOP: Wait for Blazor to render the form inputs
+        let attempts = 0;
+        const fillerInterval = setInterval(() => {
+          attempts++;
+          if (attempts > 40) { // Stop after ~20 seconds
+            console.log("Electron: Injection Timed Out");
+            clearInterval(fillerInterval); 
+            return;
+          }
+
+          // --- SELECTORS BASED ON YOUR DESCRIPTION ---
+          // Using attribute selectors [name="..."] to match your specific tags
+          const fName = document.querySelector('input[name="FirstName"]');
+          const lName = document.querySelector('input[name="LastName"]');
+          const email = document.querySelector('input[name="Email"]');
+          const dob   = document.querySelector('input[name="DateOfBirth"]');
+          
+          // Find the checkbox (assuming it's the first input of type checkbox in the form)
+          const checkbox = document.querySelector('input[type="checkbox"]');
+
+          // Check if we found the main fields
+          if (fName && lName && email) {
+            console.log("Electron: Form fields found! Injecting data...");
+
+            if (data.firstName) setNativeValue(fName, data.firstName);
+            if (data.lastName)  setNativeValue(lName, data.lastName);
+            if (data.email)     setNativeValue(email, data.email);
+            
+            // Handle Readonly Date Of Birth
+            if (dob && data.dateOfBirth) {
+               // Remove readonly temporarily if needed, or just force the value
+               dob.removeAttribute('readonly'); 
+               setNativeValue(dob, data.dateOfBirth);
+            }
+
+            // Click the checkbox
+            if (checkbox) {
+               console.log("Electron: Ticking checkbox...");
+               setCheckbox(checkbox, true);
+            }
+
+            // Success! Stop looking.
+            clearInterval(fillerInterval);
+          }
+        }, 500); // Check every 500ms
+      })();
+    `;
+
+    // Execute the injection script
+    webWindow.webContents.executeJavaScript(injectionScript).catch(err => {
+      console.error("Injection Error:", err);
+    });
+  });
+
+  // --- CONSOLE LOG WATCHER (Exit Strategy) ---
   webWindow.webContents.on('console-message', (event, level, message) => {
     // Check if the log message contains your success text
     if (message.includes('Successfully sent data to API')) {
@@ -150,14 +218,10 @@ ipcMain.handle('launch-web-kiosk', async (event, url) => {
   });
 });
 
-
 // Add this anywhere in the IPC section
 ipcMain.on('close-kiosk-window', (event) => {
-  // Find the window that sent the message and close it
   const win = BrowserWindow.fromWebContents(event.sender);
-  if (win) {
-    win.close();
-  }
+  if (win) win.close();
 });
 
 // --- FEATURE 3: READ DATABASE ---
