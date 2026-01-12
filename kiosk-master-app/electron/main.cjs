@@ -99,6 +99,48 @@ ipcMain.handle('launch-web-kiosk', async (event, url, userData) => {
     }
   });
 
+  // --- NETWORK SNIFFER START ---
+  // Used to capture outgoing data packets
+  
+  // Filter: We only care about URLs sending data (usually POST/PUT methods)
+  const filter = { urls: ['*://*/*'] }; // Listen to everything (safest for now)
+
+  webWindow.webContents.session.webRequest.onBeforeRequest(filter, (details, callback) => {
+    
+    // Check if this request is an "Upload" (sending data)
+    if (details.method === 'POST' && details.uploadData) {
+      
+      // uploadData is an array of bytes. We must decode it to text.
+      // Usually, the first block contains the JSON body.
+      const rawData = details.uploadData[0].bytes;
+      if (rawData) {
+        const dataString = rawData.toString('utf8');
+
+        // Check if this is the specific packet we want
+        // We look for a keyword from your logs, e.g., "CustomerName" or "PatientEmailBool"
+        if (dataString.includes('CustomerName') && dataString.includes('Id')) {
+          console.log("!!! INTERCEPTED PATIENT DATA !!!");
+          
+          try {
+            const jsonData = JSON.parse(dataString);
+            console.log("Captured Data:", jsonData);
+
+            // --- SAVE TO YOUR DATABASE HERE ---
+            // For now, we'll just save it to a JSON file to prove it works
+            saveDataLocally(jsonData);
+
+          } catch (e) {
+            console.error("Could not parse intercepted data:", e);
+          }
+        }
+      }
+    }
+
+    // IMPORTANT: Always let the request continue!
+    // If you forget this, the software will freeze and fail to send the email.
+    callback({ cancel: false });
+  });
+
   webWindow.loadURL(url);
 
   // --- INJECTION & WATCHER LOGIC ---
@@ -223,6 +265,19 @@ ipcMain.on('close-kiosk-window', (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (win) win.close();
 });
+
+// --- HELPER FUNCTION: SAVE DATA ---
+const fs = require('fs');
+
+function saveDataLocally(data) {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const filename = path.join(app.getPath('userData'), `patient_result_${timestamp}.json`);
+  
+  fs.writeFile(filename, JSON.stringify(data, null, 2), (err) => {
+    if (err) console.error("Failed to save file:", err);
+    else console.log(`Data saved successfully to: ${filename}`);
+  });
+}
 
 // --- FEATURE 3: READ DATABASE ---
 ipcMain.handle('read-database', async (event, tableName) => {
