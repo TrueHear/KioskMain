@@ -12,6 +12,9 @@ const DB_PATH = 'C:\\Users\\Public\\AudioConsole_data\\ACDB.mdb';
 // Choose Provider
 const connection = ADODB.open(`Provider=Microsoft.Jet.OLEDB.4.0;Data Source=${DB_PATH};`);
 
+
+console.log("UserData path:", app.getPath('userData'));
+
 let mainWindow;
 
 function createWindow() {
@@ -99,47 +102,40 @@ ipcMain.handle('launch-web-kiosk', async (event, url, userData) => {
     }
   });
 
+  if (isDev) {
+    webWindow.webContents.openDevTools({ mode: 'detach' });
+  }
+
+
+
   // --- NETWORK SNIFFER START ---
   // Used to capture outgoing data packets
   
   // Filter: We only care about URLs sending data (usually POST/PUT methods)
   const filter = { urls: ['*://*/*'] }; // Listen to everything (safest for now)
 
+ // webWindow.webContents.session.webRequest.removeAllListeners('onBeforeRequest');
+
   webWindow.webContents.session.webRequest.onBeforeRequest(filter, (details, callback) => {
-    
-    // Check if this request is an "Upload" (sending data)
+  try {
     if (details.method === 'POST' && details.uploadData) {
-      
-      // uploadData is an array of bytes. We must decode it to text.
-      // Usually, the first block contains the JSON body.
-      const rawData = details.uploadData[0].bytes;
-      if (rawData) {
+      const rawData = details.uploadData[0]?.bytes;
+      if (rawData && details.url.includes('/api/oscilla/sendresult')) {
         const dataString = rawData.toString('utf8');
+        const jsonData = JSON.parse(dataString);
 
-        // Check if this is the specific packet we want
-        // We look for a keyword from your logs, e.g., "CustomerName" or "PatientEmailBool"
-        if (dataString.includes('CustomerName') && dataString.includes('Id')) {
-          console.log("!!! INTERCEPTED PATIENT DATA !!!");
-          
-          try {
-            const jsonData = JSON.parse(dataString);
-            console.log("Captured Data:", jsonData);
-
-            // --- SAVE TO YOUR DATABASE HERE ---
-            // For now, we'll just save it to a JSON file to prove it works
-            saveDataLocally(jsonData);
-
-          } catch (e) {
-            console.error("Could not parse intercepted data:", e);
-          }
-        }
+        console.log("✅ FINAL RESULT PAYLOAD CAPTURED");
+        saveDataLocally(jsonData);
       }
     }
-
-    // IMPORTANT: Always let the request continue!
-    // If you forget this, the software will freeze and fail to send the email.
+  } catch (e) {
+    console.error("Interceptor error:", e);
+  } finally {
     callback({ cancel: false });
+  }
   });
+
+
 
   webWindow.loadURL(url);
 
@@ -148,83 +144,68 @@ ipcMain.handle('launch-web-kiosk', async (event, url, userData) => {
     
     // 1. DATA INJECTION SCRIPT
     const injectionScript = `
-      (function() {
-        console.log("Electron: Starting Data Injection...");
-        
-        // Pass the data from Electron to the browser context
-        const data = ${JSON.stringify(userData || {})};
+  (function() {
+    console.log("Electron: Starting Data Injection...");
 
-        // HELPER: Forces Blazor/React to detect value changes
-        function setNativeValue(element, value) {
-          const valueSetter = Object.getOwnPropertyDescriptor(element, 'value').set;
-          const prototype = Object.getPrototypeOf(element);
-          const prototypeValueSetter = Object.getOwnPropertyDescriptor(prototype, 'value').set;
-          
-          if (valueSetter && valueSetter !== prototypeValueSetter) {
-            prototypeValueSetter.call(element, value);
-          } else {
-            valueSetter.call(element, value);
-          }
-          
-          element.value = value;
-          element.dispatchEvent(new Event('input', { bubbles: true }));
-          element.dispatchEvent(new Event('change', { bubbles: true }));
-          element.dispatchEvent(new Event('blur', { bubbles: true })); // Sometimes needed for validation
+    const data = ${JSON.stringify(userData || {})};
+
+    let injected = false; // ✅ must be here
+
+    function setNativeValue(element, value) {
+      try {
+        element.focus();
+        element.value = value;
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+        element.dispatchEvent(new Event('blur', { bubbles: true }));
+      } catch (e) {
+        console.error("setNativeValue failed:", e);
+      }
+    }
+
+    function setCheckbox(element, checked) {
+      if (element.checked !== checked) {
+        element.click();
+      }
+    }
+
+    let attempts = 0;
+    const fillerInterval = setInterval(() => {
+      attempts++;
+      if (attempts > 40) {
+        console.log("Electron: Injection Timed Out");
+        clearInterval(fillerInterval);
+        return;
+      }
+
+      const fName = document.querySelector('input[name="FirstName"]');
+      const lName = document.querySelector('input[name="LastName"]');
+      const email = document.querySelector('input[name="Email"]');
+      const dob   = document.querySelector('input[name="DateOfBirth"]');
+      const checkbox = document.querySelector('input[type="checkbox"]');
+
+      if (fName && lName && email && !injected) {
+        injected = true;
+        console.log("Electron: Injecting data once...");
+
+        if (data.firstName) setNativeValue(fName, data.firstName);
+        if (data.lastName)  setNativeValue(lName, data.lastName);
+        if (data.email)     setNativeValue(email, data.email);
+
+        if (dob && data.dateOfBirth) {
+          dob.removeAttribute('readonly');
+          setNativeValue(dob, data.dateOfBirth);
         }
 
-        // HELPER: Forces Checkbox Click
-        function setCheckbox(element, checked) {
-           if (element.checked !== checked) {
-              element.click(); // 'Click' is often safer than setting .checked for frameworks
-           }
+        if (checkbox) {
+          setCheckbox(checkbox, true);
         }
 
-        // RETRY LOOP: Wait for Blazor to render the form inputs
-        let attempts = 0;
-        const fillerInterval = setInterval(() => {
-          attempts++;
-          if (attempts > 40) { // Stop after ~20 seconds
-            console.log("Electron: Injection Timed Out");
-            clearInterval(fillerInterval); 
-            return;
-          }
+        clearInterval(fillerInterval);
+        }
+      }, 500);
+  })();
 
-          // --- SELECTORS BASED ON YOUR DESCRIPTION ---
-          // Using attribute selectors [name="..."] to match your specific tags
-          const fName = document.querySelector('input[name="FirstName"]');
-          const lName = document.querySelector('input[name="LastName"]');
-          const email = document.querySelector('input[name="Email"]');
-          const dob   = document.querySelector('input[name="DateOfBirth"]');
-          
-          // Find the checkbox (assuming it's the first input of type checkbox in the form)
-          const checkbox = document.querySelector('input[type="checkbox"]');
-
-          // Check if we found the main fields
-          if (fName && lName && email) {
-            console.log("Electron: Form fields found! Injecting data...");
-
-            if (data.firstName) setNativeValue(fName, data.firstName);
-            if (data.lastName)  setNativeValue(lName, data.lastName);
-            if (data.email)     setNativeValue(email, data.email);
-            
-            // Handle Readonly Date Of Birth
-            if (dob && data.dateOfBirth) {
-               // Remove readonly temporarily if needed, or just force the value
-               dob.removeAttribute('readonly'); 
-               setNativeValue(dob, data.dateOfBirth);
-            }
-
-            // Click the checkbox
-            if (checkbox) {
-               console.log("Electron: Ticking checkbox...");
-               setCheckbox(checkbox, true);
-            }
-
-            // Success! Stop looking.
-            clearInterval(fillerInterval);
-          }
-        }, 500); // Check every 500ms
-      })();
     `;
 
     // Execute the injection script
@@ -240,9 +221,9 @@ ipcMain.handle('launch-web-kiosk', async (event, url, userData) => {
       console.log("Test Success detected! Closing window in 5 seconds...");
       
       // Optional: Wait 5 seconds to let the user see the result, then close
-      setTimeout(() => {
-        webWindow.close();
-      }, 5000);
+      //setTimeout(() => {
+      //  webWindow.close();
+      //}, 5000);
     }
   });
 
