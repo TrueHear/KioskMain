@@ -145,66 +145,74 @@ ipcMain.handle('launch-web-kiosk', async (event, url, userData) => {
     // 1. DATA INJECTION SCRIPT
     const injectionScript = `
   (function() {
-    console.log("Electron: Starting Data Injection...");
+                    console.log("Electron: Starting Data Injection...");
+                    const data = ${JSON.stringify(userData || {})};
+                    let injected = false;
+                    
+                    // Helper to make React/Blazor "see" the changes
+                    function setNativeValue(element, value) {
+                        element.focus();
+                        element.value = value;
+                        element.dispatchEvent(new Event('input', { bubbles: true }));
+                        element.dispatchEvent(new Event('change', { bubbles: true }));
+                        element.dispatchEvent(new Event('blur', { bubbles: true }));
+                    }
 
-    const data = ${JSON.stringify(userData || {})};
+                    function setCheckbox(element, checked) {
+                        if (element.checked !== checked) {
+                            element.click(); // Clicking usually triggers the events automatically
+                        }
+                    }
 
-    let injected = false; // ✅ must be here
+                    let attempts = 0;
+                    const fillerInterval = setInterval(() => {
+                        attempts++;
+                        if (attempts > 40) { // Stop trying after 20 seconds
+                            console.log("Electron: Injection Timed Out");
+                            clearInterval(fillerInterval);
+                            return;
+                        }
 
-    function setNativeValue(element, value) {
-      try {
-        element.focus();
-        element.value = value;
-        element.dispatchEvent(new Event('input', { bubbles: true }));
-        element.dispatchEvent(new Event('change', { bubbles: true }));
-        element.dispatchEvent(new Event('blur', { bubbles: true }));
-      } catch (e) {
-        console.error("setNativeValue failed:", e);
-      }
-    }
+                        // Selectors
+                        const fName = document.querySelector('input[name="FirstName"]');
+                        const lName = document.querySelector('input[name="LastName"]');
+                        const email = document.querySelector('input[name="Email"]');
+                        const dob   = document.querySelector('input[name="DateOfBirth"]');
+                        const checkbox = document.querySelector('input[type="checkbox"]'); 
+                        
+                        // Find the Submit Button (matches <button type="submit"> or <input type="submit">)
+                        const submitBtn = document.querySelector('button[type="submit"], input[type="submit"]');
 
-    function setCheckbox(element, checked) {
-      if (element.checked !== checked) {
-        element.click();
-      }
-    }
+                        // Check if fields exist and we haven't run yet
+                        if (fName && lName && !injected) {
+                            injected = true;
+                            console.log("Electron: Form fields found. Injecting data...");
 
-    let attempts = 0;
-    const fillerInterval = setInterval(() => {
-      attempts++;
-      if (attempts > 40) {
-        console.log("Electron: Injection Timed Out");
-        clearInterval(fillerInterval);
-        return;
-      }
+                            // 1. Fill Data
+                            if (data.firstName) setNativeValue(fName, data.firstName);
+                            if (data.lastName) setNativeValue(lName, data.lastName);
+                            if (data.email) setNativeValue(email, data.email);
+                            
+                            // 2. Handle Checkbox (if it exists)
+                            if (checkbox) {
+                                setCheckbox(checkbox, true);
+                            }
 
-      const fName = document.querySelector('input[name="FirstName"]');
-      const lName = document.querySelector('input[name="LastName"]');
-      const email = document.querySelector('input[name="Email"]');
-      const dob   = document.querySelector('input[name="DateOfBirth"]');
-      const checkbox = document.querySelector('input[type="checkbox"]');
+                            // 3. Auto-Submit with Safety Delay
+                            // We wait 500ms to let the website validate the inputs and enable the button
+                            setTimeout(() => {
+                                if (submitBtn) {
+                                    console.log("Electron: Auto-clicking Submit...");
+                                    submitBtn.click();
+                                } else {
+                                    console.log("Electron: Submit button not found, user must click manually.");
+                                }
+                            }, 500);
 
-      if (fName && lName && email && !injected) {
-        injected = true;
-        console.log("Electron: Injecting data once...");
-
-        if (data.firstName) setNativeValue(fName, data.firstName);
-        if (data.lastName)  setNativeValue(lName, data.lastName);
-        if (data.email)     setNativeValue(email, data.email);
-
-        if (dob && data.dateOfBirth) {
-          dob.removeAttribute('readonly');
-          setNativeValue(dob, data.dateOfBirth);
-        }
-
-        if (checkbox) {
-          setCheckbox(checkbox, true);
-        }
-
-        clearInterval(fillerInterval);
-        }
-      }, 500);
-  })();
+                            clearInterval(fillerInterval);
+                        }
+                    }, 500);
+                })();
 
     `;
 

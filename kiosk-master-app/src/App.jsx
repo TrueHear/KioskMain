@@ -18,7 +18,7 @@ function App() {
     const userData = {
     firstName: "Matti",
     lastName: "Meikäläinen",
-    email: "truehearteam@gmail.com.com",
+    email: "truehearteam@gmail.com",
     dateOfBirth: "1980-01-01" // Format usually YYYY-MM-DD or DD.MM.YYYY depending on your site
   };
     await window.electronAPI.openWebKiosk("https://kiosk.oscilla.app/", userData);
